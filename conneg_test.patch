@@ -1,0 +1,162 @@
+diff --git a/core/lib/Drupal/Core/Routing/MatcherDumper.php b/core/lib/Drupal/Core/Routing/MatcherDumper.php
+index 0b40946..26e0529 100644
+--- a/core/lib/Drupal/Core/Routing/MatcherDumper.php
++++ b/core/lib/Drupal/Core/Routing/MatcherDumper.php
+@@ -85,6 +85,8 @@ public function addRoutes(RouteCollection $routes) {
+    *
+    * @param array $options
+    *   An array of options.
++   * @return string|void
++   * @throws \Exception
+    */
+   public function dump(array $options = array()) {
+     // Convert all of the routes into database records.
+@@ -114,6 +116,7 @@ public function dump(array $options = array()) {
+         foreach ($routes as $name => $route) {
+           /** @var \Symfony\Component\Routing\Route $route */
+           $route->setOption('compiler_class', '\Drupal\Core\Routing\RouteCompiler');
++          /** @var \Drupal\Core\Routing\CompiledRoute $compiled */
+           $compiled = $route->compile();
+           // The fit value is a binary number which has 1 at every fixed path
+           // position and 0 where there is a wildcard. We keep track of all such
+diff --git a/core/lib/Drupal/Core/Routing/RouteProvider.php b/core/lib/Drupal/Core/Routing/RouteProvider.php
+index 1f3e580..f686376 100644
+--- a/core/lib/Drupal/Core/Routing/RouteProvider.php
++++ b/core/lib/Drupal/Core/Routing/RouteProvider.php
+@@ -179,6 +179,8 @@ public function getCandidateOutlines(array $parts) {
+     $number_parts = count($parts);
+     $ancestors = array();
+     $length = $number_parts - 1;
++
++    // Binary mask of the given parts.
+     $end = (1 << $number_parts) - 1;
+ 
+     // The highest possible mask is a 1 bit for every part of the path. We will
+@@ -234,6 +236,77 @@ public function getCandidateOutlines(array $parts) {
+   }
+ 
+   /**
++   * Returns an array of path pattern outlines that could match the path parts.
++   *
++   * @param array $parts
++   *   The parts of the path for which we want candidates.
++   *
++   * @return array
++   *   An array of outlines that could match the specified path parts.
++   */
++  public function getCandidateOutlinesExtensions(array $parts) {
++    $number_parts = count($parts);
++    $ancestors = array();
++    $length = $number_parts - 1;
++    $parts[$length] = pathinfo($parts[$length], PATHINFO_FILENAME);
++    debug($parts[$length]);
++
++    // Binary mask of the given parts.
++    $end = (1 << $number_parts) - 1;
++
++    // The highest possible mask is a 1 bit for every part of the path. We will
++    // check every value down from there to generate a possible outline.
++    if ($number_parts == 1) {
++      $masks = array(1);
++    }
++    elseif ($number_parts <= 3) {
++      // Optimization - don't query the state system for short paths. This also
++      // insulates against the state entry for masks going missing for common
++      // user-facing paths since we generate all values without checking state.
++      $masks = range($end, 1);
++    }
++    elseif ($number_parts <= 0) {
++      // No path can match, short-circuit the process.
++      $masks = array();
++    }
++    else {
++      // Get the actual patterns that exist out of state.
++      $masks = (array) $this->state->get('routing.menu_masks.' . $this->tableName, array());
++    }
++
++
++    // Only examine patterns that actually exist as router items (the masks).
++    foreach ($masks as $i) {
++      if ($i > $end) {
++        // Only look at masks that are not longer than the path of interest.
++        continue;
++      }
++      elseif ($i < (1 << $length)) {
++        // We have exhausted the masks of a given length, so decrease the length.
++        --$length;
++      }
++      $current = '';
++      for ($j = $length; $j >= 0; $j--) {
++        // Check the bit on the $j offset.
++        if ($i & (1 << $j)) {
++          // Bit one means the original value.
++          $current .= $parts[$length - $j];
++        }
++        else {
++          // Bit zero means means wildcard.
++          $current .= '%';
++        }
++        // Unless we are at offset 0, add a slash.
++        if ($j) {
++          $current .= '/';
++        }
++      }
++      $ancestors[] = '/' . $current . '.%';
++    }
++    return $ancestors;
++  }
++
++  /**
+    * {@inheritdoc}
+    */
+   public function getRoutesByPattern($pattern) {
+@@ -260,15 +333,28 @@ protected function getRoutesByPath($path) {
+ 
+     $collection = new RouteCollection();
+ 
+-    $ancestors = $this->getCandidateOutlines($parts);
+-    if (empty($ancestors)) {
+-      return $collection;
++    $ext = pathinfo($path, PATHINFO_EXTENSION);
++    if ($ext) {
++      $ancestors = $this->getCandidateOutlinesExtensions($parts);
++      if ($ancestors) {
++        $routes = $this->connection->query("SELECT name, route FROM {" . $this->connection->escapeTable($this->tableName) . "} WHERE pattern_outline IN ( :patterns[] ) ORDER BY fit DESC, name ASC", array(
++          ':patterns[]' => $ancestors,
++        ))
++          ->fetchAllKeyed();
++      }
+     }
+ 
+-    $routes = $this->connection->query("SELECT name, route FROM {" . $this->connection->escapeTable($this->tableName) . "} WHERE pattern_outline IN ( :patterns[] ) ORDER BY fit DESC, name ASC", array(
+-      ':patterns[]' => $ancestors,
+-    ))
+-      ->fetchAllKeyed();
++    if (empty($routes)) {
++      $ancestors = $this->getCandidateOutlines($parts);
++      if (empty($ancestors)) {
++        return $collection;
++      }
++
++      $routes = $this->connection->query("SELECT name, route FROM {" . $this->connection->escapeTable($this->tableName) . "} WHERE pattern_outline IN ( :patterns[] ) ORDER BY fit DESC, name ASC", array(
++        ':patterns[]' => $ancestors,
++      ))
++        ->fetchAllKeyed();
++    }
+ 
+     foreach ($routes as $name => $route) {
+       $route = unserialize($route);
+diff --git a/core/modules/rest/src/Routing/ResourceRoutes.php b/core/modules/rest/src/Routing/ResourceRoutes.php
+index db439dc..b9a36cf 100644
+--- a/core/modules/rest/src/Routing/ResourceRoutes.php
++++ b/core/modules/rest/src/Routing/ResourceRoutes.php
+@@ -71,7 +71,8 @@ protected function alterRoutes(RouteCollection $collection) {
+ 
+     // Iterate over all enabled resource plugins.
+     foreach ($enabled_resources as $id => $enabled_methods) {
+-      $plugin = $this->manager->getInstance(array('id' => $id));
++      /** @var \Drupal\rest\Plugin\ResourceInterface $plugin */
++      $plugin = $this->manager->createInstance($id);
+ 
+       foreach ($plugin->routes() as $name => $route) {
+         $method = $route->getRequirement('_method');

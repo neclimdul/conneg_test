@@ -1,0 +1,15 @@
+foo:
+  path: /bar.xml
+  defaults:
+    _controller: '\Drupal\conneg_test\Controller\Simple::listing'
+    _title: 'Block layout'
+  requirements:
+    _access: 'TRUE'
+
+foo2:
+  path: /bar.{_format}
+  defaults:
+    _controller: '\Drupal\conneg_test\Controller\Simple::listing'
+    _title: 'Block layout'
+  requirements:
+    _access: 'TRUE'
