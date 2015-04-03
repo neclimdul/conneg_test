@@ -1,15 +1,26 @@
-foo:
-  path: /bar.xml
+# Tests
+conneg.simpletest:
+  path: conneg/simple.json
   defaults:
-    _controller: '\Drupal\conneg_test\Controller\Simple::listing'
-    _title: 'Block layout'
+    _controller: '\Drupal\conneg_test\Controller\Test::simple'
   requirements:
     _access: 'TRUE'
-
-foo2:
-  path: /bar.{_format}
+conneg.html:
+  path: conneg/html
   defaults:
-    _controller: '\Drupal\conneg_test\Controller\Simple::listing'
-    _title: 'Block layout'
+    _controller: '\Drupal\conneg_test\Controller\Test::html'
+  requirements:
+    _access: 'TRUE'
+conneg.simple_conneg:
+  path: conneg/html.{_format}
+  defaults:
+    _controller: '\Drupal\conneg_test\Controller\Test::format'
+  requirements:
+    _access: 'TRUE'
+    _format: 'json|xml'
+conneg.simple_conneg:
+  path: conneg/plugin/{plugin_id}
+  defaults:
+    _controller: '\Drupal\conneg_test\Controller\Test::variable'
   requirements:
     _access: 'TRUE'
